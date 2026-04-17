@@ -1,0 +1,217 @@
+// Scripted Pipeline for TestNG Jenkins EPAM Practice
+node {
+    // Define tools
+    def mvnHome = tool name: 'Maven3', type: 'maven'
+    def javaHome = tool name: 'JDK21', type: 'jdk'
+
+    // Set environment variables
+    env.JAVA_HOME = javaHome
+    env.PATH = "${mvnHome}/bin:${javaHome}/bin:${env.PATH}"
+
+    // Define variables
+    def buildStatus = 'SUCCESS'
+    def testResults = ''
+
+    try {
+        // Stage 1: Checkout
+        stage('Checkout') {
+            echo '========== Stage 1: Checking out source code =========='
+            checkout scm
+            echo "Workspace: ${env.WORKSPACE}"
+            echo "Build Number: ${env.BUILD_NUMBER}"
+            echo "Branch: ${env.BRANCH_NAME ?: 'master'}"
+        }
+
+        // Stage 2: Environment Setup
+        stage('Environment Setup') {
+            echo '========== Stage 2: Setting up environment =========='
+            if (isUnix()) {
+                sh 'java -version'
+                sh 'mvn -version'
+            } else {
+                bat 'java -version'
+                bat 'mvn -version'
+            }
+            echo "Maven Home: ${mvnHome}"
+            echo "Java Home: ${javaHome}"
+        }
+
+        // Stage 3: Clean
+        stage('Clean') {
+            echo '========== Stage 3: Cleaning workspace =========='
+            if (isUnix()) {
+                sh 'mvn clean'
+            } else {
+                bat 'mvn clean'
+            }
+            echo 'Clean completed successfully'
+        }
+
+        // Stage 4: Compile
+        stage('Compile') {
+            echo '========== Stage 4: Compiling source code =========='
+            if (isUnix()) {
+                sh 'mvn compile'
+            } else {
+                bat 'mvn compile'
+            }
+            echo 'Compilation completed successfully'
+        }
+
+        // Stage 5: Test Compilation
+        stage('Test Compile') {
+            echo '========== Stage 5: Compiling test code =========='
+            if (isUnix()) {
+                sh 'mvn test-compile'
+            } else {
+                bat 'mvn test-compile'
+            }
+            echo 'Test compilation completed successfully'
+        }
+
+        // Stage 6: Run Tests
+        stage('Run Tests') {
+            echo '========== Stage 6: Running TestNG tests =========='
+            try {
+                if (isUnix()) {
+                    sh 'mvn test'
+                } else {
+                    bat 'mvn test'
+                }
+                testResults = 'All tests passed'
+            } catch (Exception e) {
+                buildStatus = 'UNSTABLE'
+                testResults = 'Some tests failed'
+                echo "Test execution failed: ${e.message}"
+                currentBuild.result = 'UNSTABLE'
+            }
+        }
+
+        // Stage 7: Generate Reports
+        stage('Generate Reports') {
+            echo '========== Stage 7: Generating test reports =========='
+
+            // Publish TestNG Results
+            if (fileExists('target/surefire-reports/testng-results.xml')) {
+                echo 'Publishing TestNG results...'
+                step([$class: 'Publisher', reportFilenamePattern: '**/target/surefire-reports/testng-results.xml'])
+            }
+
+            // Publish JUnit Results
+            if (fileExists('target/surefire-reports')) {
+                echo 'Publishing JUnit test results...'
+                junit allowEmptyResults: true, testResults: '**/target/surefire-reports/*.xml'
+            }
+
+            // Archive test reports
+            archiveArtifacts artifacts: '**/target/surefire-reports/**', allowEmptyArchive: true
+            archiveArtifacts artifacts: '**/target/test-output/**', allowEmptyArchive: true
+
+            // Publish HTML reports
+            publishHTML(target: [
+                allowMissing: true,
+                alwaysLinkToLastBuild: true,
+                keepAll: true,
+                reportDir: 'target/surefire-reports',
+                reportFiles: 'index.html',
+                reportName: 'TestNG Report'
+            ])
+
+            echo 'Reports generated successfully'
+        }
+
+        // Stage 8: Code Quality Analysis (Optional)
+        stage('Code Quality') {
+            echo '========== Stage 8: Code quality analysis =========='
+            echo 'Skipping code quality checks (can be integrated with SonarQube)'
+            // Uncomment below to integrate with SonarQube
+            // withSonarQubeEnv('SonarQube') {
+            //     if (isUnix()) {
+            //         sh 'mvn sonar:sonar'
+            //     } else {
+            //         bat 'mvn sonar:sonar'
+            //     }
+            // }
+        }
+
+        // Stage 9: Package
+        stage('Package') {
+            echo '========== Stage 9: Packaging application =========='
+            if (isUnix()) {
+                sh 'mvn package -DskipTests'
+            } else {
+                bat 'mvn package -DskipTests'
+            }
+
+            // Archive the packaged artifacts
+            if (fileExists('target/*.jar')) {
+                archiveArtifacts artifacts: 'target/*.jar', allowEmptyArchive: true
+                echo 'Artifacts packaged and archived successfully'
+            }
+        }
+
+    } catch (Exception e) {
+        buildStatus = 'FAILURE'
+        echo "Pipeline failed with error: ${e.message}"
+        e.printStackTrace()
+        currentBuild.result = 'FAILURE'
+        throw e
+
+    } finally {
+        // Stage 10: Cleanup and Notification
+        stage('Cleanup & Notification') {
+            echo '========== Stage 10: Cleanup and notification =========='
+
+            // Print build summary
+            echo '========================================='
+            echo "Build Status: ${buildStatus}"
+            echo "Test Results: ${testResults}"
+            echo "Build Number: ${env.BUILD_NUMBER}"
+            echo "Build URL: ${env.BUILD_URL}"
+            echo "Job Name: ${env.JOB_NAME}"
+            echo "Workspace: ${env.WORKSPACE}"
+            echo '========================================='
+
+            // Send notifications (can be configured with email, Slack, etc.)
+            if (buildStatus == 'SUCCESS') {
+                echo '✓ BUILD SUCCESSFUL: All stages completed successfully!'
+                // Uncomment to send email notifications
+                // emailext(
+                //     subject: "SUCCESS: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'",
+                //     body: """<p>Good news! The build succeeded.</p>
+                //              <p><b>Build URL:</b> ${env.BUILD_URL}</p>
+                //              <p><b>Test Results:</b> ${testResults}</p>""",
+                //     to: 'team@example.com',
+                //     mimeType: 'text/html'
+                // )
+            } else if (buildStatus == 'UNSTABLE') {
+                echo '⚠ BUILD UNSTABLE: Tests failed but build completed'
+                // Uncomment to send email notifications
+                // emailext(
+                //     subject: "UNSTABLE: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'",
+                //     body: """<p>The build is unstable due to test failures.</p>
+                //              <p><b>Build URL:</b> ${env.BUILD_URL}</p>
+                //              <p><b>Test Results:</b> ${testResults}</p>""",
+                //     to: 'team@example.com',
+                //     mimeType: 'text/html'
+                // )
+            } else {
+                echo '✗ BUILD FAILED: Pipeline encountered errors'
+                // Uncomment to send email notifications
+                // emailext(
+                //     subject: "FAILURE: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'",
+                //     body: """<p>Build failed. Please check the logs.</p>
+                //              <p><b>Build URL:</b> ${env.BUILD_URL}</p>
+                //              <p><b>Console Output:</b> ${env.BUILD_URL}console</p>""",
+                //     to: 'team@example.com',
+                //     mimeType: 'text/html'
+                // )
+            }
+
+            // Optional: Clean workspace after build
+            // cleanWs()
+
+            echo 'Pipeline execution completed.'
+        }
+    }
+}
